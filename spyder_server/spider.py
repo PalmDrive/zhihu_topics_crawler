@@ -1,15 +1,11 @@
 # -*- coding: utf-8 -*-
-import requests
-import re
-import time
-import os.path
 import json
-import urllib
-import urllib2
-import cookielib
-from models import *
-import random
 import time
+
+import os.path
+import re
+import requests
+from graph import Topic, save, is_done, save_new_topic
 
 try:
     from PIL import Image
@@ -18,138 +14,27 @@ except:
 from bs4 import BeautifulSoup
 
 
-class Topic(object):
-    def __init__(self, id, name):
-        self.id = id
-        self.name = name
-
-
-class Content(object):
-    def __init__(self, id, imgsrc, name, content):
-        self.id = id
-        self.img = imgsrc
-        self.name = name
-        self.content = content
-
-def loop_until_return(n, f, *args, **kwargs):
-    for i in range(n):
-        print 'trying NO.%s time of %s(%s)' % (i, f, args)
-        try:
-            return f(*args, **kwargs)
-        except Exception:
-            pass
-    else:
-        print '----'*20
-        print f,args,kwargs
-        print 'tried '+str(n)+'times and failed'
-        print '----'*20
-
-
-
-def getTopics():
-    zhihuTopics = []
-    url = 'https://www.zhihu.com/topics'
-    cj = cookielib.CookieJar()
-    opener = urllib2.build_opener(urllib2.HTTPCookieProcessor(cj))
-    request = urllib2.Request(url)
-    response = opener.open(request)
-    pattern = re.compile('<li.*?data-id="(.*?)"><a.*?>(.*?)</a></li>', re.S)
-    results = re.findall(pattern, response.read().decode('utf-8'))
-    for n1 in results:
-        print n1[0], n1[1]
-        topic = Topic(n1[0], n1[1])
-        zhihuTopics.append(topic)
-    return zhihuTopics
-
-
-def getSubTopic(topic):
-    url = 'https://www.zhihu.com/node/TopicsPlazzaListV2'
-    isGet = True
-    offset = -20
-    contents = []
-
-    time.sleep(random.random())
-    while isGet:
-        offset = offset + 20
-        values = {'method': 'next',
-                  'params': '{"topic_id":' + topic.id + ',"offset":' + str(
-                      offset) + ',"hash_id":""}'}
-        try:
-            data = urllib.urlencode(values)
-            request = urllib2.Request(url, data, headers)
-            response = urllib2.urlopen(request)
-            json_str = json.loads(response.read().decode('utf-8'))
-            # 将获取到的数组转换成字符串
-            topicMsg = '.'.join(json_str['msg'])
-
-            pattern = re.compile(
-                '"/topic/(.*?)">\n<img src="(.*?)" alt="(.*?)">\n<strong>(.*?)</strong>.*?<p>(.*?)</p>',
-                re.S)
-            results = re.findall(pattern, topicMsg)
-
-            if len(results) == 0:
-                isGet = False
-            for n in results:
-                content = Content(n[0], n[1], n[2], n[4])
-                contents.append(content)
-                print n[0], '->' + n[1] + '->' + n[2]  + '->' + n[4]
-
-        except urllib2.URLError, e:
-            if hasattr(e, "reason"):
-                print u"错误原因", e
-
-    # file = open(topic.name + '.txt', 'w')
-    # wiriteLog(contents, file)
-    return contents
-
-
-def wiriteLog(contentes, file):
-    for content in contentes:
-        file.writelines(
-            (
-                '\n' +content+ content.img + '->' + content.name + '->' + content.content).encode(
-                "UTF-8"))
-
-def get_the_topics_with_img():
-    print '开始拉取数据...\n'
-    headers = {
-        'User-Agent': 'Mozilla/5.0 (X11; Ubuntu; Linux x86_64; rv:35.0) Gecko/20100101 Firefox/35.0',
-        'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8',
-        'X-Requested-With': 'XMLHttpRequest',
-        'Referer': 'https://www.zhihu.com/topics',
-        'Cookie': '__utma=51854390.517069884.1416212035.1416212035.1416212035.1; q_c1=c02bf44d00d240798bfabcfc95baeb56|1455778173000|1416205243000; _za=b1c8ae35-f986-46a2-b24a-cb9359dc6b2a; aliyungf_tc=AQAAAJ1m71jL1woArKqF22VFnL/wRy6C; _xsrf=9d494558f9271340ab24598d85b2a3c8; cap_id="MDNiMjcwM2U0MTRhNDVmYjgxZWVhOWI0NTA2OGU5OTg=|1455864276|2a4ce8247ebd3c0df5393bb5661713ad9eec01dd"; n_c=1; _alicdn_sec=56c6ba4d556557d27a0f8c876f563d12a285f33a'
-    }
-
-    alen = 0
-    topics = getTopics()
-
-
-    for topic in topics:
-        parent_id = topic.id
-        contents = getSubTopic(topic)
-        for i in contents:
-            topic = ZhihuTopic()
-            topic.set("topic_id",i.id)
-            topic.set("img", i.img)
-            topic.set("name", i.name)
-            topic.set("description", i.content)
-            topic.set("parent_topic_id", parent_id)
-            loop_until_return(10,lambda :topic.save())
-
-        alen += len(contents)
-
-    print '知乎总话题数为：' + str(alen)
-    print '拉取数据结束'
-
-
 class Spider(object):
+    Load_More_Sub_Topics_URL_Pattern = "https://www.zhihu.com/topic/%s/organize/entire?child=%s&parent=%s"
+    Load_Sub_Topics_URL_Pattern = 'https://www.zhihu.com/topic/%s/organize/entire'
+    Top_Topic_ID = '19776749'
+
     def __init__(self):
         self.logn_url = 'http://www.zhihu.com/#signin'
         self.session = requests.session()
         self.headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 6.1; WOW64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/52.0.2743.82 Safari/537.36',
+            'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_9_1) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/30.0.1581.2 Safari/537.36',
+            'Host': 'www.zhihu.com',
+            'Origin': 'http://www.zhihu.com',
+            'Connection': 'keep-alive',
+            'Referer': 'http://www.zhihu.com',
+            'Content-Type': 'application/x-www-form-urlencoded',
+            'Accept-Encoding': 'gzip, deflate, br',
+            'Accept-Language': 'en-US,en;q=0.8,zh-CN;q=0.6,zh;q=0.4,zh-TW;q=0.2',
+
         }
         self._xsrf = ""
+        self.pending_topics = []
 
     # 获取验证码
     def get_captcha(self):
@@ -175,7 +60,7 @@ class Spider(object):
         self._xsrf = self.soup.find('input', attrs={'name': "_xsrf"})['value']
         return self._xsrf
 
-    def isLogin(self):
+    def is_login(self):
         # 通过查看用户个人信息来判断是否已经登录
         url = "https://www.zhihu.com/settings/profile"
         login_code = self.session.get(url, allow_redirects=False).status_code
@@ -185,36 +70,90 @@ class Spider(object):
             return False
 
     def start(self):
-        r = self.session.get("http://localhost:63360/register", )
-        res = json.loads(r.content)
-        self.id = res["id"]
-        print 'spider id:%s ' % self.id
-        if not self.isLogin():
+        if not self.is_login():
             print '登录中:'
-            self.login('asdfgh', '935685518@qq.com')
+            self.login('', '')
         else:
             print '已登录..'
 
         print '开始获取话题列表...'
+        self.bfs_fetch_all_topics()
         topics = self.get_topics()
         print '获取到话题个数:%s' % len(topics)
-
+        print ', '.join(topics)
 
     def get_topics(self):
-        zhihuTopics = []
         url = 'https://www.zhihu.com/topics'
-        response = self.session.get(url)
-        pattern = re.compile('<li.*?data-id="(.*?)"><a.*?>(.*?)</a></li>', re.S)
-        results = re.findall(pattern, response.content.decode('utf-8'))
-        for n1 in results:
-            print n1[0], n1[1]
-            topic = Topic(n1[0], n1[1])
-            zhihuTopics.append(topic)
-        return zhihuTopics
+        response = self.session.get(url, headers=self.headers)
+        soup = BeautifulSoup(response.content.decode('utf-8'), "html.parser")
+        topics = [x.find('a').get_text() for x in
+                  soup.find_all('li', class_='zm-topic-cat-item')]
+        return topics
+
+    def bfs_fetch_all_topics(self):
+        pt = Topic.nodes.filter(done=False)
+        if len(pt) == 0:
+            self.pending_topics.append(self.Top_Topic_ID)
+        else:
+            for p in pt:
+                self.pending_topics.append(p.topic_id)
+        while len(self.pending_topics):
+            current_children = []
+            target = self.pending_topics[0]
+            self.pending_topics.pop(0)
+            try:
+                if is_done(target):
+                    continue
+
+                (current_topic, child_topics, sub_topic_url) = self.fetch_child_topics(
+                        self.Load_Sub_Topics_URL_Pattern % target)
+                current_children = current_children + child_topics
+                print 'current child topic', len(current_children)
+                while sub_topic_url:
+                    (current_topic, child_topics, sub_topic_url) = self.fetch_child_topics(sub_topic_url)
+                    current_children = current_children + child_topics
+                    print 'current child topic', len(current_children)
+
+                save(current_topic, current_children)
+                for p in current_children:
+                    self.pending_topics.append(p.topic_id)
+                    save_new_topic(p)
+                print len(self.pending_topics)
+            except Exception as e:
+                print e
+
+    def fetch_child_topics(self, url):
+        response = self.session.post(
+                url, headers=self.headers, data={'_xsrf': self.get_xsrf()})
+        content = response.content.decode('utf-8')
+        data = json.loads(content)
+        if len(data['msg']) == 0:
+            return
+
+        data = data['msg']
+        current_topic = None
+        sub_topic_url = None
+        child_topics = []
+        # current_topic
+        if data[0][0] == u'topic':
+            current_topic = Topic(name=data[0][1], topic_id=data[0][2], done=False)
+
+        if len(data) > 1:
+            data = data[1]
+
+        for i in range(0, len(data)):
+            if data[i][0][0] == u'topic':
+                child_topic = Topic(name=data[i][0][1], topic_id=data[i][0][2], done=False)
+                child_topics.append(child_topic)
+
+            elif data[i][0][0] == u'load':
+                sub_topic_url = self.Load_More_Sub_Topics_URL_Pattern % (
+                    data[i][0][3], data[i][0][2], data[i][0][3])
+        return current_topic, child_topics, sub_topic_url
 
     def login(self, secret, account):
-        self.content = self.session.get(self.logn_url,
-                                        headers=self.headers).content
+        self.content = self.session.get(
+                self.logn_url, headers=self.headers).content
         self.soup = BeautifulSoup(self.content, 'html.parser')
         self.get_xsrf()
 
@@ -250,49 +189,10 @@ class Spider(object):
         finally:
             login_code = login_page.text
             result = json.loads(login_code)
+            print result
             print "登录结果:", result["msg"].encode("utf8")
-
-
-    def getallview(self):
-        nums = 27  # 这个是我关注的人数
-        followees_headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 6.1; WOW64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/52.0.2743.82 Safari/537.36',
-            'Referer': 'https://www.zhihu.com/people/GitSmile/followees',
-            'Origin': 'https://www.zhihu.com',
-            'Accept-Encoding': 'gzip, deflate, br',
-            'CG - Sid': '57226ad5 - 793b - 4a9d - 9791 - 2a9a17e682ef',
-            'Accept': '* / *'
-
-        }
-        count = 0
-        for index in range(0, nums):
-            fo_url = 'https://www.zhihu.com/node/ProfileFolloweesListV2'
-            m_data = {
-                'method': 'next',
-                'params': '{"offset":' + str(
-                    index) + ',"order_by":"created","hash_id":"de2cb64bc1afe59cf8a6e456ee5eaebc"}',
-                '_xsrf': str(self.get_xsrf())
-            }
-            result = self.session.post(fo_url, data=m_data,
-                                       headers=followees_headers)
-            dic = json.loads(result.content.decode('utf-8'))
-            li = dic['msg'][0]
-            mysoup = BeautifulSoup(li, 'html.parser')
-            for result in mysoup.findAll('a', attrs={
-                'class': 'zm-item-link-avatar'}):
-                print(index + 1)
-                print(result.get('title'))
-                href = str(result.get('href'))
-                print(
-                    mysoup.find('a', attrs={'href': href + '/followers'}).text)
-                print(mysoup.find('a', attrs={'href': href + '/asks'}).text)
-                print(mysoup.find('a', attrs={'href': href + '/answers'}).text)
-                print(mysoup.find('a', attrs={'href': href,
-                                              'class': 'zg-link-gray-normal'}).text + '\n')
-                count += 1
-        print('一共关注了 %d人' % count)
 
 
 s = Spider()
 
-# s.start()
+s.start()
